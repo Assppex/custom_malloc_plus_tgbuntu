@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.10)
+project(tgbuntu VERSION 1.0)
+configure_file(Config.h.in Config.h)
+add_executable(tgbuntu main.cpp)
+target_include_directories(tgbuntu PUBLIC "${PROJECT_BINARY_DIR}")
+include_directories(tgbuntu ${PROJECT_SOURCE_DIR}/headers)
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_CXX_STANDARD 11)

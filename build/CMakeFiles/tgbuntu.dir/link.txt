@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/tgbuntu.dir/main.cpp.o -o tgbuntu 

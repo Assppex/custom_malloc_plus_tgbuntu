@@ -1,0 +1,3 @@
+/home/artem/tgbuntu/build/CMakeFiles/tgbuntu.dir
+/home/artem/tgbuntu/build/CMakeFiles/edit_cache.dir
+/home/artem/tgbuntu/build/CMakeFiles/rebuild_cache.dir
