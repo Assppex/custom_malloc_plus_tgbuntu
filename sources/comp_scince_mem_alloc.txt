@@ -1,0 +1,2 @@
+https://habr.com/ru/post/270009/ --- malloc (computer science)
+https://github.com/miguelperes/custom-malloc - repo with custom malloc exmaple (mymalloc contains it)
