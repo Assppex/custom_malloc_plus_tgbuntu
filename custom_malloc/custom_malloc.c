@@ -23,10 +23,9 @@
 (инициализирован/нет),указательна последний адрес,
 который можно выделить и указатель который будет установлен на начло выделяемой памяти
 */ 
-int init_flag=0;
-void* border_of_occupied_memory_ptr;
-void* allocated_memory_ptr;
 
+int last_size_of_mmaping = 1 ; //см ниже что это
+int* last_addres = 0;
 /*
     Важно понимать, что классический malloc не просто берет и расширяет количссетво памяти в куче,
     а сначала ищет, есть ли достаточный по обьему фрагмент памяти, свободный при этом, который можно
@@ -79,6 +78,14 @@ freelist_t* freelist_first_item = NULL;
 #define FOOTER_SZ sizeof(metadata_end_t)
 #define IN_USE 1
 #define VACANT 0
+
+#define MIN_SOTERED_SIZE sizeof(freelist_t)+10
+
+#define PAGE_SIZE sysconf(_SC_PAGESIZE) //получаем размер страницы в байтах
+#define CEIL(X) ((X - (int)(X)) > 0 ? (int)(X + 1) : (int)(X))
+#define PAGES(size) (CEIL(size / (double)PAGE_SIZE))
+#define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
+
 //Функция для получения указателя на полезную нагрузку в блоке (фрагменте памяти), указатель на начало которого - ptr
 //т.е ptr - указатель на header
 void* get_ptr_to_payload(void* ptr){
@@ -190,9 +197,106 @@ void delete_from_free_list(void* ptr){
         }
     }
 }
+/*
+    Теперь функция поиска свободных блоков с передаваемым размером, возвращаем указатель именно сразу на
+    header свободного блока
+*/
+void* search_for_freeblock(int requested_size){
+    freelist_t* current_free_block;
+    while(current_free_block){
+        if(check_size_of_free_list_instance(current_free_block)>=requested_size){
+            void* header_ptr = current_free_block -HEADER_SZ;
+            return header_ptr;
+        }
+        else{
+            current_free_block = current_free_block->next;
+        }
+    }
+    return NULL;
+}
+/*
+    Иногда так выходит, что во фрилисте есть блок ,сильно превышающий размер, запрошенный пользователем
+    поэтому, чтобы избежать утечек памяти или ее нерационального расхода, надо делить блок на тот, что
+    по размеру такой как запросил пользователь и остаток, который останется во фрилисте, то есть надо опять
+    переназначать линковку двусвязного списка.
+
+    Однако надо понимать, что делить блок на 2 не всегда возможно, т.к. как минимум оставшийся свободный блок
+    должен вместить в себя структуру freelist_t (ведь эта оставшаяся часть во фрилисте остается), то есть должен
+    быть некоторый минимальный размер MIN_STORED_SIZE для этого и введен
+
+    Деление проиисходит обычно следующим образом:
+        1)Блок который мы вернем пользователю он наинается с указателя на header найденного блока
+        2)Указатель на новый блок, который останется во фрилисте получается как указатель на начало
+        блока который изначаьно был найден во фрилисте, но слишком большого размера + размер запрошенного пользователем блока
+*/
+void splice_the_block(void* ptr,int size_of_found_free_block,int requested_size_of_block){
+    void* rest_free_block_ptr = ptr + requested_size_of_block;
+    int rest_free_block_size = size_of_found_free_block - requested_size_of_block;
+    if(rest_free_block_ptr<MIN_SOTERED_SIZE){
+        return;
+    }
+    //Далее формируем блок который останется во фрилисте
+    metadata_t header_of_new_block = {VACANT,rest_free_block_ptr};
+    metadata_end_t footer_of_new_block = {VACANT,rest_free_block_ptr};
+    metadata_t* rest_free_block_header_ptr = (metadata_t*)rest_free_block_ptr;
+    metadata_end_t* rest_free_block_footer_ptr = (metadata_end_t*)get_ptr_to_footer(ptr);
+
+    *rest_free_block_header_ptr = header_of_new_block;
+    *rest_free_block_footer_ptr = footer_of_new_block;
+
+    add_to_free_list(rest_free_block_ptr);
+
+}
+void* custom_malloc(int size){
+    if(size<=0){
+        //не используем printf тк он использует malloc, а это нам не надо
+        write(STDOUT_FILENO, "Eror of custom_malloc ---> implicit size", strlen("Eror of custom_malloc ---> implicit size")); 
+        return NULL;
+    }
+    //Теперь вспомним: помимо полезной нагрузки мы должны хранить header + footer, а еще блок не должен быть меньше, чем MIN_STORED_SIZE
+    int real_allocating_size = size + HEADER_SZ + FOOTER_SZ;
+    //Пытаемся найти во фрилисте уже выделенный, но свободный блок
+    void* ptr = search_for_freeblock(real_allocating_size);
+    //Если блок нашелся
+    if(ptr){
+        //Поскольку мы достаем блок из фрилиста, надо его пометить, как занятый
+        set_tag_of_access(ptr,IN_USE);
+        //Далее попробуем поделить найденный блок на 2, чтобы сэкономить память
+        splice_the_block(ptr,((metadata_t*)ptr)->size,size);
+        //Ну и поскольку пользователю надо вернуть указатель на полезную нагрузку, а не наши header или footer,то достаем указатель на payload
+        return(get_ptr_to_payload(ptr));
+    }
+    //Если блока не нашлось
+    /*
+        Далее, чтобы сократить количество вызовов процессорных инструкций, таких как mmap допустим будем
+        выделять памяти каждый раз в 2 раза больше (это нам ничем не повредить, потому что если что
+        у нас есит split функция, которая если что поделит этот блок и выделит памяти просто без вызова 
+        mmap, все равно эта память нам нужна будет)
+    */
+   int bytes_for_allocation = MAX(PAGES(real_allocating_size),last_size_of_mmaping)*PAGE_SIZE;
+   last_size_of_mmaping*=2;
+   void* new_block_of_memory = mmap(last_addres, bytes_for_allocation, PROT_READ | PROT_WRITE,MAP_ANONYMOUS| MAP_PRIVATE, -1, 0);
+   if(new_block_of_memory == MAP_FAILED){
+        return NULL;
+   }
+   //Делаем header/footer для нового блока
+   metadata_t header = {IN_USE,bytes_for_allocation};
+   metadata_t* header_ptr = (metadata_t*)new_block_of_memory;
+   *header_ptr = header;
+   metadata_end_t footer = {IN_USE,bytes_for_allocation};
+   metadata_end_t* footer_ptr = (metadata_end_t*)get_ptr_to_footer(new_block_of_memory);
+   *footer_ptr = footer;
+   //далее поскольку мы выделили памяти чуть боьльше чем надо, засплитим полученный блок памяти и вернем указатель на него уже для пользователя
+   splice_the_block(new_block_of_memory,bytes_for_allocation,real_allocating_size);
+   //сдвинем адрес последнего блока
+   last_addres = new_block_of_memory + bytes_for_allocation;
+   return(get_ptr_to_payload(new_block_of_memory));
+
+}
 
 int main (void){
     metadata_t a;
     metadata_end_t b;
     printf("%lu,%lu",sizeof(a),sizeof(b));
+    void* ptr = custom_malloc(128);
 }
