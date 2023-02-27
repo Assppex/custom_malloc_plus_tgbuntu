@@ -93,7 +93,7 @@ void* get_ptr_to_payload(void* ptr){
 }
 //Получаем указатель на footer (ptr - указатель на header)
 void* get_ptr_to_footer(void* ptr){
-    return ptr + HEADER_SZ + ((metadata_t*)ptr)->size - FOOTER_SZ;
+    return ptr + ((metadata_t*)ptr)->size - FOOTER_SZ;
 }
 /*
     Функция, чтобы менять состояние блока (занят/свободен)
@@ -202,7 +202,7 @@ void delete_from_free_list(void* ptr){
     header свободного блока
 */
 void* search_for_freeblock(int requested_size){
-    freelist_t* current_free_block;
+    freelist_t* current_free_block = freelist_first_item;
     while(current_free_block){
         if(check_size_of_free_list_instance(current_free_block)>=requested_size){
             void* header_ptr = current_free_block -HEADER_SZ;
@@ -232,12 +232,14 @@ void* search_for_freeblock(int requested_size){
 void splice_the_block(void* ptr,int size_of_found_free_block,int requested_size_of_block){
     void* rest_free_block_ptr = ptr + requested_size_of_block;
     int rest_free_block_size = size_of_found_free_block - requested_size_of_block;
-    if(rest_free_block_ptr<MIN_SOTERED_SIZE){
+    if(rest_free_block_size<MIN_SOTERED_SIZE){
         return;
     }
+    //Рассматриваем ту часть, которая относится к запрашиваемому блоку и устанавливаем ей запрошенный размер
+    ((metadata_t*)ptr)->size = requested_size_of_block;
     //Далее формируем блок который останется во фрилисте
-    metadata_t header_of_new_block = {VACANT,rest_free_block_ptr};
-    metadata_end_t footer_of_new_block = {VACANT,rest_free_block_ptr};
+    metadata_t header_of_new_block = {VACANT,rest_free_block_size};
+    metadata_end_t footer_of_new_block = {VACANT,rest_free_block_size};
     metadata_t* rest_free_block_header_ptr = (metadata_t*)rest_free_block_ptr;
     metadata_end_t* rest_free_block_footer_ptr = (metadata_end_t*)get_ptr_to_footer(ptr);
 
@@ -283,20 +285,43 @@ void* custom_malloc(int size){
    metadata_t header = {IN_USE,bytes_for_allocation};
    metadata_t* header_ptr = (metadata_t*)new_block_of_memory;
    *header_ptr = header;
-   metadata_end_t footer = {IN_USE,bytes_for_allocation};
+   metadata_end_t footer = {};
+   footer.if_available = IN_USE;
    metadata_end_t* footer_ptr = (metadata_end_t*)get_ptr_to_footer(new_block_of_memory);
    *footer_ptr = footer;
    //далее поскольку мы выделили памяти чуть боьльше чем надо, засплитим полученный блок памяти и вернем указатель на него уже для пользователя
    splice_the_block(new_block_of_memory,bytes_for_allocation,real_allocating_size);
    //сдвинем адрес последнего блока
    last_addres = new_block_of_memory + bytes_for_allocation;
+   write(STDOUT_FILENO, "Succesfully allocated", strlen("Succesfully allocated:"));
+   printf("\n%ld,%ld,%ld,%d",((metadata_t*)new_block_of_memory)->size,HEADER_SZ,FOOTER_SZ,size);
    return(get_ptr_to_payload(new_block_of_memory));
 
 }
+/*
+void custom_memcpy(void* where, void* from, size_t size){
+    int i;
+    for(){
+
+    }
+}
+*/
 
 int main (void){
     metadata_t a;
     metadata_end_t b;
-    printf("%lu,%lu",sizeof(a),sizeof(b));
-    void* ptr = custom_malloc(128);
+    //printf("%lu,%lu",sizeof(a),sizeof(b));
+    char* ptr = custom_malloc(6);
+    char abs[6]= "hello";
+    int sdvig = strlen(abs);
+    printf("\n%ld",sizeof(abs));
+    /*
+    for(int i =0;i<=100;i++){
+        memcpy(ptr+sdvig*i,abs,strlen(abs));
+        printf("%s\n",ptr);
+    }
+    //int* temp;
+    //scanf("%d",temp);
+    printf("\n%s\n",ptr);
+    */
 }
