@@ -1,1 +1,1 @@
-Study project ----> custom_malloc, after that it is planned to make a bot to communicate via ssh with terminal in ubuuntu
+All sources presented are not a intillegent property of author, all of them were found and downloaded with free-acces online.
