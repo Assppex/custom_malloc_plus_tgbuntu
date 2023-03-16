@@ -136,7 +136,7 @@ void add_to_free_list(void* ptr){
         блок и предыдущий
     */
     freelist_t* new_freelist_block_ptr = get_ptr_to_payload(ptr);
-    if(!freelist_first_item){
+    if(freelist_first_item==NULL){
         //Если рассматриваемый блок памяти первый, помещенный во фрилист, то не следующего, не предыдущего блока не будет
         freelist_first_item = new_freelist_block_ptr;
         new_freelist_block_ptr->prev = NULL;
@@ -162,16 +162,17 @@ void add_to_free_list(void* ptr){
     , надо сменить линковку (то есть переобозначить по новой указатели)
 */
 void delete_from_free_list(void* ptr){
+    write(STDOUT_FILENO, "0", strlen("0")); 
     set_tag_of_access(ptr,IN_USE);
     freelist_t* block_to_be_freed = (freelist_t*)get_ptr_to_payload(ptr);
 
-    freelist_t* next_free_block = block_to_be_freed ->next;
-    freelist_t* prev_free_block = block_to_be_freed ->prev;
-
-    if(!prev_free_block){
-        if(!next_free_block){
+    freelist_t* next_free_block =(freelist_t*)(block_to_be_freed ->next);
+    freelist_t* prev_free_block = (freelist_t*)(block_to_be_freed ->prev);
+    if(prev_free_block==NULL || freelist_first_item==NULL){
+        if(next_free_block==NULL || freelist_first_item==NULL){
             //То есть фрилист состоит только из одного элмента, с которым мы и имеем дело
             freelist_first_item = NULL;
+            write(STDOUT_FILENO, "3", strlen("3")); 
         }
         else{
             /*
@@ -187,13 +188,16 @@ void delete_from_free_list(void* ptr){
         
     }
     else{
-        if(!next_free_block){
+        if(next_free_block==NULL){
+            write(STDOUT_FILENO, "2", strlen("2")); 
             //То есть если нет следующего блока во фрилисте (имеем дело с последним блоком фрилиста)
             prev_free_block->next = NULL;
         }
         else{
+            write(STDOUT_FILENO, "1", strlen("1")); 
             next_free_block->prev = prev_free_block;
             prev_free_block->next = next_free_block;
+            
         }
     }
 }
@@ -293,33 +297,122 @@ void* custom_malloc(int size){
    splice_the_block(new_block_of_memory,bytes_for_allocation,real_allocating_size);
    //сдвинем адрес последнего блока
    last_addres = new_block_of_memory + bytes_for_allocation;
-   write(STDOUT_FILENO, "Succesfully allocated", strlen("Succesfully allocated:"));
+   
    printf("\n%ld,%ld,%ld,%d",((metadata_t*)new_block_of_memory)->size,HEADER_SZ,FOOTER_SZ,size);
+   write(STDOUT_FILENO, "Succesfully allocated", strlen("Succesfully allocated:"));
    return(get_ptr_to_payload(new_block_of_memory));
 
 }
 /*
-void custom_memcpy(void* where, void* from, size_t size){
-    int i;
-    for(){
+    При освобождении памяти нет смысла перефрагментировать нашу память, можно сделать функцию, которая
+    будет обьединять освобожденные блоки,точнее будем смотреть, допустим, вот наша память:
 
+    |занятый блок (1)|занятый блок, который собираемся отчищать (2)|свободный блок (3)|
+    
+    Поскольку выше существует функция splice_the_block и ,учитывая то, что чем более фрагментирована память,
+    тем хуже, мы будем стараться добавлять во фрилист все блоки максимальной величины, но в памяти, 
+    может выйти ситуация представленная выше, если просто освободить средний блок, то он полетит во фрилист,
+    то есть туда добавится один лишний фрагмент, хотя можно было бы сделать так: вытащить блок (3) из фрилиста,
+    освободить блок (2), соеденить блоки (2) и (3) и добавить получившееся во фрилист, если что при дальнейшей
+    работе эти блоки подробятся, но так при каждом высвобождении памяти у нас фрагментация памяти не будет расти
+
+*/
+void stick_blocks(void* ptr){
+    if(freelist_first_item!=NULL){
+        metadata_t* header_of_block = (metadata_t*)ptr;
+        metadata_end_t* footer_of_block = (metadata_end_t*)get_ptr_to_footer(ptr);
+        //(metadata_end_t*)(ptr - FOOTER_SZ) - указатель на футер предыдущего блока памяти (т.е сейчас проверяем свободен ли предыдущий блок)
+        if((metadata_end_t*)(ptr - FOOTER_SZ)!=NULL && ((metadata_end_t*)(ptr - FOOTER_SZ))->if_available==VACANT){
+            void* prev_block_ptr = ptr -((metadata_end_t*)(ptr - FOOTER_SZ))->size;
+            metadata_end_t* prev_block_footer_ptr = get_ptr_to_footer(prev_block_ptr);
+            metadata_t* prev_block_header_ptr = (metadata_t*)prev_block_ptr;
+            if(prev_block_ptr){
+                //delete_from_free_list(header_of_block);
+                //новый хедер - это хедер предыдущего блока, он же справа, поэтому просто сдвигаем хедер текущего блока в хедер предыдущего
+                prev_block_header_ptr->size += header_of_block->size;
+                //наш блок был справа, справа и останется, поэтому футер не меняем, меняем в нем только размер
+                footer_of_block->size =  prev_block_header_ptr->size;
+                //Сместили хедер текущего блока в хедер предыдущего,а футер оставили тем самым как бы получили огромный блок,слив их воедино
+                header_of_block = prev_block_header_ptr;
+                add_to_free_list(header_of_block);
+            }
+        }
+        /*
+            Далее тут есть такая штука, что свободный блок может располагаться в памяти и справа от рассматриваемого
+            ,а может выйти так, что свободные блоки и слева, и справа, поэтому тут не else if, а еще один if
+            Теперь смотрим свободен ли следующий блок и если что обьединяем (следующий по отношению к переданному ptr)
+        */
+        if(ptr+((metadata_t*)ptr)->size!=NULL && ((metadata_t*)(ptr+((metadata_t*)ptr)->size))->if_available==VACANT){
+            void* next_block_ptr = ptr+((metadata_t*)ptr)->size;
+            metadata_t* next_block_header_ptr = (metadata_t*)next_block_ptr;
+            metadata_end_t* next_block_footer_ptr = get_ptr_to_footer(next_block_ptr);
+            /*
+                Тут ситуация такова |(1) блок|(2) блок|(3) блок|
+                Если сместить хедер 2 блока вправо, то у меня останется блок памяти которая будет вообще подвешена
+                и не понятно куда ушла (именно поэтому мы смещали в предыдущем ифе именно хедер рассматриваемого блока влево, а не наоборот)
+                поэтому мы скажем, что хедер останется хедером,а вот футер второго станет новым -----> переместится на место футера 3го блока
+            */
+            //delete_from_free_list(header_of_block);
+            header_of_block->size+=next_block_header_ptr->size;
+            next_block_footer_ptr->size = header_of_block->size;
+            footer_of_block = next_block_footer_ptr;
+            add_to_free_list(header_of_block);
+        }
     }
 }
+/*
+    Далее тут все сложно нужна функция, которая будет очищать виртуальную память, выделенную mmap-ом
 */
+int unmap(void* ptr,int size){
+    //чистм size байтов
+    //Тут надо просто проверить последний ли это блок, выделенной mmap-ом
+    if(last_addres == ptr){
+        last_addres = ptr - size;
+    }
+    return (munmap(ptr,(size_t)size));
+}
+void custom_free(void* payload_ptr){
+    if(!payload_ptr){
+        return;
+    }
+    void* block_ptr = payload_ptr - HEADER_SZ;
+    /*
+        Нужно проверить, а не свободен ли переданный нам блок, если он свободен, то нет нужды его освобождать
+    */
+   int size = ((metadata_t*)block_ptr)->size;
+   metadata_t* block_header_ptr = (metadata_t*)block_ptr;
+   uintptr_t adress = (uintptr_t)block_header_ptr;
+   if(size%PAGE_SIZE == 0 && adress%PAGE_SIZE==0){
+        //Если все пространство (PAGE) свободно или так скажем выровнено , мы может применять munmap
+        unmap(block_ptr,size);
+   }
+   else{
+        //склеим блоки а потом полученный блок добавим во фрилист, склеивать будем, если фрилист не пуст
+        add_to_free_list(block_ptr);
+        stick_blocks(block_ptr);
+        //остаток вычистим
+        if (size >= PAGE_SIZE && adress % PAGE_SIZE == 0) {
+            splice_the_block(block_ptr, size, (size / PAGE_SIZE) * PAGE_SIZE);
+            unmap(block_ptr, (size / PAGE_SIZE) * PAGE_SIZE);
+        }
+   }
+   printf("%s","Free done");
 
+}   
 int main (void){
     metadata_t a;
     metadata_end_t b;
     //printf("%lu,%lu",sizeof(a),sizeof(b));
-    char* ptr = custom_malloc(6);
-    char abs[6]= "hello";
+    char* ptr = custom_malloc(128);
+    char abs[128]= "hello";
     int sdvig = strlen(abs);
     printf("\n%ld",sizeof(abs));
+    custom_free(ptr);
     /*
     for(int i =0;i<=100;i++){
         memcpy(ptr+sdvig*i,abs,strlen(abs));
         printf("%s\n",ptr);
-    }
+    }s
     //int* temp;
     //scanf("%d",temp);
     printf("\n%s\n",ptr);
